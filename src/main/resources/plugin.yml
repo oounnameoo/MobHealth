@@ -1,0 +1,6 @@
+name: MobHealth
+version: '${project.version}'
+main: com.example.mobhealth.MobHealthPlugin
+api-version: "26.1"
+description: "Show a top-center HUD with the health of the mob you're looking at"
+author: UnName
