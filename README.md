@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A lightweight Paper plugin that shows a **top-center HUD** with the health of the mob you're looking at.
+A lightweight Paper plugin that shows a **floating health label above every mob**.
 
 ---
 
@@ -10,22 +10,28 @@ A lightweight Paper plugin that shows a **top-center HUD** with the health of th
 
 | Feature | Description |
 |---|---|
-| **Top-center HUD** | Uses a boss bar at the top of the screen. |
-| **Mob name** | Shows the mob's name or translated type (e.g., "Zombie"). |
-| **Health** | Displays current health / max health (e.g., `10 / 20`). |
-| **Health bar** | Boss-bar progress and color reflect remaining health. |
-| **Per-player** | Each player sees their own target's health. |
+| **Floating health labels** | Each mob has a visible health tag above its head. |
+| **Current / max health** | Shows remaining health and maximum health (e.g., `❤ 10 / 20`). |
+| **Color-coded health** | Label is green → yellow → red based on remaining health percentage. |
+| **Mobs only** | Players and non-living entities are ignored. |
+| **Distance culling** | Labels are hidden when no player is within 32 blocks, reducing clutter. |
+| **Armor-stand based** | Uses an invisible, marker armor stand so the label is smooth and collision-free. |
+| **Automatic cleanup** | Labels are removed when a mob dies or the plugin disables. |
+| **No configuration needed** | Works out of the box. |
 
 ---
 
 ## How It Works
 
-The plugin ray-traces from the player's eyes every tick to find the living entity they're looking at within 6 blocks. When a mob is found:
+Every tick the plugin scans all loaded living entities (excluding players). For each mob it creates or updates an invisible armor stand floating above the mob's head. The stand's name shows a heart icon plus the mob's current and maximum health, colored by how injured the mob is. The label hides automatically when no player is nearby and is removed when the mob dies.
 
-1. A boss bar appears at the top center.
-2. The title shows the mob name and health.
-3. The bar fills and changes color based on health percentage.
-4. The bar hides when looking at air, blocks, other players, or beyond range.
+---
+
+## Usage
+
+1. Install the plugin on your Paper server.
+2. Spawn or find any mob.
+3. A health label appears above the mob.
 
 ---
 
@@ -44,7 +50,7 @@ The plugin ray-traces from the player's eyes every tick to find the living entit
 1. Download the latest `MobHealth-*.jar` from the [Releases](../../releases) page.
 2. Place the JAR in your server's `plugins/` directory.
 3. Restart your server.
-4. Look at any mob — the HUD appears automatically.
+4. Look at any mob — its health appears above its head.
 
 ---
 

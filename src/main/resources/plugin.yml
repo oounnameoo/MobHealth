@@ -1,6 +1,14 @@
-name: MobHealth
+name: MobHealth-26.2
 version: '${project.version}'
 main: com.example.mobhealth.MobHealthPlugin
-api-version: "26.1"
-description: "Show a top-center HUD with the health of the mob you're looking at"
+api-version: "26.2"
+description: "Show targeted mob health as a boss bar at the top center"
 author: UnName
+commands:
+  mobhealth:
+    description: MobHealth admin commands
+    usage: /mobhealth cleanup
+    permission: mobhealth.admin
+permissions:
+  mobhealth.admin:
+    default: op

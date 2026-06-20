@@ -4,125 +4,174 @@ import net.kyori.adventure.bossbar.BossBar;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
-import org.bukkit.FluidCollisionMode;
+import org.bukkit.Bukkit;
+import org.bukkit.World;
 import org.bukkit.attribute.Attribute;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
+import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.Listener;
-import org.bukkit.event.player.PlayerJoinEvent;
-import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
-import org.bukkit.util.RayTraceResult;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
-public class MobHealthPlugin extends JavaPlugin implements Listener {
+public class MobHealthPlugin extends JavaPlugin {
 
-    /** How far the player can target a mob. */
-    private static final int RAY_TRACE_DISTANCE = 6;
+    /** Maximum distance a player can be looking at a mob for the boss bar to show. */
+    private static final double BOSS_BAR_RANGE = 32.0;
 
-    /** Per-player HUD state. */
-    private static final class HudState {
-        final BossBar bar;
+    /** How often (in ticks) to refresh each player's boss bar. */
+    private static final long UPDATE_INTERVAL = 4L;
 
-        HudState(BossBar bar) {
-            this.bar = bar;
-        }
-    }
+    /** Tag used on old floating ArmorStand labels so they can be cleaned up. */
+    private static final String LABEL_TAG = "mobhealth_label";
 
-    private final Map<UUID, HudState> playerStates = new HashMap<>();
+    /** player UUID -> boss bar */
+    private final Map<UUID, BossBar> playerBossBars = new ConcurrentHashMap<>();
+
+    private BukkitRunnable bossBarTask;
 
     @Override
     public void onEnable() {
-        getServer().getPluginManager().registerEvents(this, this);
-        startUpdateTask();
+        cleanupOldLabels();
+        startBossBarTask();
         getLogger().info("MobHealth enabled.");
     }
 
     @Override
     public void onDisable() {
-        for (Map.Entry<UUID, HudState> entry : playerStates.entrySet()) {
-            Player player = getServer().getPlayer(entry.getKey());
+        if (bossBarTask != null) {
+            bossBarTask.cancel();
+        }
+        for (Map.Entry<UUID, BossBar> entry : playerBossBars.entrySet()) {
+            Player player = Bukkit.getPlayer(entry.getKey());
             if (player != null) {
-                player.hideBossBar(entry.getValue().bar);
+                player.hideBossBar(entry.getValue());
             }
         }
-        playerStates.clear();
+        playerBossBars.clear();
         getLogger().info("MobHealth disabled.");
     }
 
-    @EventHandler
-    public void onPlayerJoin(PlayerJoinEvent event) {
-        Player player = event.getPlayer();
-        BossBar bar = BossBar.bossBar(
-                Component.empty(),
-                1f,
-                BossBar.Color.RED,
-                BossBar.Overlay.PROGRESS
-        );
-        playerStates.put(player.getUniqueId(), new HudState(bar));
+    @Override
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (args.length == 1 && "cleanup".equalsIgnoreCase(args[0])) {
+            int removed = cleanupOldLabels();
+            sender.sendMessage("Removed " + removed + " old MobHealth labels.");
+            return true;
+        }
+        sender.sendMessage("Usage: /mobhealth cleanup");
+        return true;
     }
 
-    @EventHandler
-    public void onPlayerQuit(PlayerQuitEvent event) {
-        Player player = event.getPlayer();
-        HudState state = playerStates.remove(player.getUniqueId());
-        if (state != null) {
-            player.hideBossBar(state.bar);
+    /** Remove any leftover floating labels from previous versions. */
+    private int cleanupOldLabels() {
+        int removed = 0;
+        for (World world : Bukkit.getWorlds()) {
+            for (Entity entity : world.getEntities()) {
+                if (entity instanceof ArmorStand stand && stand.getScoreboardTags().contains(LABEL_TAG)) {
+                    stand.remove();
+                    removed++;
+                }
+            }
+        }
+        if (removed > 0) {
+            getLogger().info("Cleaned up " + removed + " old MobHealth labels.");
+        }
+        return removed;
+    }
+
+    private void startBossBarTask() {
+        bossBarTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                for (Player player : Bukkit.getOnlinePlayers()) {
+                    // getTargetEntity performs a ray-trace on the main thread.
+                    // Keep BOSS_BAR_RANGE as small as practical to limit cost.
+                    Entity target = player.getTargetEntity((int) BOSS_BAR_RANGE);
+                    if (target instanceof LivingEntity mob && !(mob instanceof Player) && mob.isValid()) {
+                        showHealth(player, mob);
+                    } else {
+                        hideHealth(player);
+                        player.sendActionBar(Component.empty());
+                    }
+                }
+            }
+        };
+        bossBarTask.runTaskTimer(this, 1L, UPDATE_INTERVAL);
+    }
+
+    private void showHealth(Player player, LivingEntity mob) {
+        double health = Math.max(0, mob.getHealth());
+        var maxHealthAttr = mob.getAttribute(Attribute.MAX_HEALTH);
+        double maxHealth = maxHealthAttr != null ? maxHealthAttr.getValue() : health;
+
+        float progress = maxHealth <= 0 ? 0.0f : (float) Math.min(1.0, Math.max(0.0, health / maxHealth));
+        BossBar.Color color = bossBarColor(health, maxHealth);
+        NamedTextColor hColor = healthColor(health, maxHealth);
+        Component name = Component.text()
+                .append(Component.text(mob.getName() + " ", NamedTextColor.WHITE))
+                .append(Component.text("❤ ", NamedTextColor.RED))
+                .append(Component.text(formatHealth(health) + " / " + formatHealth(maxHealth), hColor))
+                .build();
+
+        BossBar bossBar = playerBossBars.get(player.getUniqueId());
+        if (bossBar == null) {
+            bossBar = BossBar.bossBar(name, progress, color, BossBar.Overlay.PROGRESS);
+            playerBossBars.put(player.getUniqueId(), bossBar);
+            player.showBossBar(bossBar);
+        } else {
+            bossBar.name(name);
+            bossBar.progress(progress);
+            bossBar.color(color);
+        }
+
+        // Action bar: show health above the hotbar
+        Component actionBar = Component.text()
+                .append(Component.text(mob.getName(), NamedTextColor.WHITE, TextDecoration.BOLD))
+                .append(Component.text("  ❤ ", NamedTextColor.RED))
+                .append(Component.text(formatHealth(health), hColor, TextDecoration.BOLD))
+                .append(Component.text(" / " + formatHealth(maxHealth), NamedTextColor.GRAY))
+                .build();
+        player.sendActionBar(actionBar);
+    }
+
+    private void hideHealth(Player player) {
+        BossBar bossBar = playerBossBars.remove(player.getUniqueId());
+        if (bossBar != null) {
+            player.hideBossBar(bossBar);
         }
     }
 
-    private void startUpdateTask() {
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                for (Player player : getServer().getOnlinePlayers()) {
-                    HudState state = playerStates.get(player.getUniqueId());
-                    if (state == null) {
-                        continue;
-                    }
-
-                    RayTraceResult result = player.rayTraceEntities(RAY_TRACE_DISTANCE, false);
-                    Entity target = result != null ? result.getHitEntity() : null;
-
-                    if (!(target instanceof LivingEntity mob) || target instanceof Player) {
-                        player.hideBossBar(state.bar);
-                        continue;
-                    }
-
-                    updateBossBar(player, state, mob);
-                }
-            }
-        }.runTaskTimer(this, 0L, 1L);
+    private NamedTextColor healthColor(double health, double maxHealth) {
+        if (maxHealth <= 0) {
+            return NamedTextColor.WHITE;
+        }
+        double ratio = health / maxHealth;
+        if (ratio > 0.5) {
+            return NamedTextColor.GREEN;
+        } else if (ratio > 0.25) {
+            return NamedTextColor.YELLOW;
+        }
+        return NamedTextColor.RED;
     }
 
-    private void updateBossBar(Player player, HudState state, LivingEntity mob) {
-        double health = Math.max(0, mob.getHealth());
-        double maxHealth = mob.getAttribute(Attribute.MAX_HEALTH) != null
-                ? mob.getAttribute(Attribute.MAX_HEALTH).getValue()
-                : health;
-
-        float progress = maxHealth > 0 ? (float) Math.min(1.0, health / maxHealth) : 0f;
-
-        Component name = mob.customName() != null
-                ? mob.customName()
-                : Component.translatable(mob.getType().translationKey());
-
-        Component title = Component.text()
-                .append(Component.text("❤ ", NamedTextColor.RED))
-                .append(name.colorIfAbsent(NamedTextColor.WHITE).decorate(TextDecoration.BOLD))
-                .append(Component.text("  " + formatHealth(health) + " / " + formatHealth(maxHealth), NamedTextColor.WHITE))
-                .build();
-
-        state.bar.name(title);
-        state.bar.progress(progress);
-        state.bar.color(barColor(progress));
-        player.showBossBar(state.bar);
+    private BossBar.Color bossBarColor(double health, double maxHealth) {
+        if (maxHealth <= 0) {
+            return BossBar.Color.WHITE;
+        }
+        double ratio = health / maxHealth;
+        if (ratio > 0.5) {
+            return BossBar.Color.GREEN;
+        } else if (ratio > 0.25) {
+            return BossBar.Color.YELLOW;
+        }
+        return BossBar.Color.RED;
     }
 
     private String formatHealth(double value) {
@@ -130,11 +179,5 @@ public class MobHealthPlugin extends JavaPlugin implements Listener {
             return String.valueOf((int) value);
         }
         return String.format("%.1f", value);
-    }
-
-    private BossBar.Color barColor(float progress) {
-        if (progress > 0.5f) return BossBar.Color.GREEN;
-        if (progress > 0.25f) return BossBar.Color.YELLOW;
-        return BossBar.Color.RED;
     }
 }
